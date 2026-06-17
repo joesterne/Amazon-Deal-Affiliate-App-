@@ -1,0 +1,6 @@
+{
+  "name": "Affiliate Price Drop Scanner",
+  "description": "Scans Amazon for price changes by category and exports to Google Sheets. Creates tasks for recurring alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
