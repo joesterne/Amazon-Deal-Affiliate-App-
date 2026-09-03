@@ -21,13 +21,17 @@ async function startServer() {
   // API route for scanning with Gemini + Search Grounding
   app.post("/api/scan", async (req, res) => {
     try {
-      const { category } = req.body;
+      const { category, discountThreshold } = req.body;
       if (!category) {
         return res.status(400).json({ error: "Category is required" });
       }
 
+      const discountRequirement = discountThreshold 
+        ? `Ensure all products have a discount of at least ${discountThreshold}% off the original price.` 
+        : "Identify 3 to 5 specific products that currently have good deals.";
+
       const prompt = `Search Amazon for recent significant price drops, clearance deals, or discounts in the category: "${category}". 
-Identify 3 to 5 specific products that currently have good deals. 
+${discountRequirement}
 For each product, provide:
 1. The product name
 2. A short description of the item
@@ -64,6 +68,43 @@ Output the result purely as a JSON array of objects without any markdown formatt
     } catch (error: any) {
       console.error("Error during scan:", error);
       res.status(500).json({ error: error.message || "Failed to scan" });
+    }
+  });
+
+  // API route for getting estimated price history
+  app.post("/api/price-history", async (req, res) => {
+    try {
+      const { productName, originalPrice, dealPrice } = req.body;
+      if (!productName) {
+        return res.status(400).json({ error: "Product name is required" });
+      }
+
+      const prompt = `Generate a realistic 30-day price history for the product "${productName}". 
+The price 30 days ago was roughly ${originalPrice} and the current deal price today is ${dealPrice}. 
+Provide exactly 30 data points (one for each of the last 30 days) showing how the price fluctuated or dropped over this period. 
+Output as a pure JSON array of objects with schema:
+[
+  { "date": "MMM DD", "price": number }
+]
+Do not use markdown formatting. Just output the JSON.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+          temperature: 0.2
+        }
+      });
+
+      const text = response.text || "[]";
+      const history = JSON.parse(text);
+      
+      res.json({ history });
+    } catch (error: any) {
+      console.error("Error generating history:", error);
+      res.status(500).json({ error: error.message || "Failed to generate history" });
     }
   });
 

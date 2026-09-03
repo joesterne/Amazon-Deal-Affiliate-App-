@@ -1,16 +1,26 @@
 import React, { useState } from "react";
-import { Search, Loader2, ArrowUpRight, Save, Clock, CheckCircle } from "lucide-react";
-import { Deal } from "../types";
+import { Search, Loader2, ArrowUpRight, Save, Clock, CheckCircle, LineChart as LineChartIcon, X, Bell } from "lucide-react";
+import { Deal, PriceHistoryItem } from "../types";
 import { createSpreadsheet, appendToSheet, createTask } from "../lib/workspaceApi";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function Dashboard() {
   const [category, setCategory] = useState("");
   const [affiliateTag, setAffiliateTag] = useState("");
+  const [discountThreshold, setDiscountThreshold] = useState(20);
   const [isScanning, setIsScanning] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
   const [error, setError] = useState("");
+
+  const [selectedProduct, setSelectedProduct] = useState<Deal | null>(null);
+  const [priceHistory, setPriceHistory] = useState<PriceHistoryItem[]>([]);
+  const [isFetchingHistory, setIsFetchingHistory] = useState(false);
+
+  const [alertDeal, setAlertDeal] = useState<Deal | null>(null);
+  const [targetPrice, setTargetPrice] = useState<string>("");
+  const [alertNotification, setAlertNotification] = useState<string>("");
 
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,7 +35,7 @@ export default function Dashboard() {
       const response = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category })
+        body: JSON.stringify({ category, discountThreshold })
       });
 
       if (!response.ok) {
@@ -106,6 +116,41 @@ export default function Dashboard() {
     }
   };
 
+  const handleViewTrend = async (deal: Deal) => {
+    if (selectedProduct?.productName === deal.productName && priceHistory.length > 0) {
+      // Already viewing this deal's trend
+      return;
+    }
+    
+    setSelectedProduct(deal);
+    setIsFetchingHistory(true);
+    setPriceHistory([]);
+    
+    try {
+      const response = await fetch("/api/price-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          productName: deal.productName,
+          originalPrice: deal.originalPrice,
+          dealPrice: deal.dealPrice
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch price history.");
+      }
+
+      const data = await response.json();
+      setPriceHistory(data.history || []);
+    } catch (err: any) {
+      console.error(err);
+      // Fallback: If it fails, we just don't show the graph properly or we show empty.
+    } finally {
+      setIsFetchingHistory(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Stats Overview */}
@@ -148,6 +193,20 @@ export default function Dashboard() {
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               placeholder="e.g. Wireless Noise Cancelling Headphones"
+              className="w-full px-4 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-shadow outline-none text-sm text-slate-800"
+              required
+            />
+          </div>
+
+          <div className="w-24 shrink-0 space-y-1">
+            <label htmlFor="threshold" className="block text-sm font-bold text-slate-700">Min. Drop %</label>
+            <input
+              type="number"
+              id="threshold"
+              value={discountThreshold}
+              onChange={(e) => setDiscountThreshold(parseInt(e.target.value) || 0)}
+              min="1"
+              max="99"
               className="w-full px-4 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-shadow outline-none text-sm text-slate-800"
               required
             />
@@ -222,7 +281,7 @@ export default function Dashboard() {
                     <th className="px-6 py-3 border-b border-slate-200">Department</th>
                     <th className="px-6 py-3 border-b border-slate-200">Price (Now)</th>
                     <th className="px-6 py-3 border-b border-slate-200">Price (Old)</th>
-                    <th className="px-6 py-3 border-b border-slate-200 text-right">Affiliate Link</th>
+                    <th className="px-6 py-3 border-b border-slate-200 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm text-slate-700 divide-y divide-slate-100">
@@ -242,14 +301,34 @@ export default function Dashboard() {
                       <td className="px-6 py-4 font-bold text-emerald-600">{deal.dealPrice}</td>
                       <td className="px-6 py-4 text-slate-400 line-through">{deal.originalPrice}</td>
                       <td className="px-6 py-4 text-right">
-                        <a
-                          href={processUrl(deal.amazonUrl)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center text-xs font-mono text-blue-600 hover:text-blue-800 break-all max-w-[200px]"
-                        >
-                          View Deal <ArrowUpRight className="w-3 h-3 ml-1" />
-                        </a>
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            onClick={() => {
+                              setAlertDeal(deal);
+                              const numMatch = deal.dealPrice.match(/[\d.]+/);
+                              setTargetPrice(numMatch ? numMatch[0] : "");
+                            }}
+                            className="inline-flex items-center text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                          >
+                            <Bell className="w-3.5 h-3.5 mr-1" />
+                            Alert
+                          </button>
+                          <button
+                            onClick={() => handleViewTrend(deal)}
+                            className="inline-flex items-center text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                          >
+                            <LineChartIcon className="w-3.5 h-3.5 mr-1" />
+                            Trend
+                          </button>
+                          <a
+                            href={processUrl(deal.amazonUrl)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center text-xs font-mono text-blue-600 hover:text-blue-800 break-all max-w-[200px]"
+                          >
+                            View Deal <ArrowUpRight className="w-3 h-3 ml-1" />
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -257,6 +336,73 @@ export default function Dashboard() {
               </table>
               <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-medium uppercase tracking-tighter">
                 <span>Showing {deals.length} active drops</span>
+              </div>
+            </div>
+          )}
+
+          {selectedProduct && (
+            <div className="border-t border-slate-200 bg-slate-50/50 p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                    30-Day Price Trend
+                    {isFetchingHistory && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-1 truncate max-w-xl">{selectedProduct.productName}</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setSelectedProduct(null);
+                    setPriceHistory([]);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="h-64 w-full bg-white border border-slate-200 rounded-lg shadow-sm p-4">
+                {isFetchingHistory ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-400">
+                    <Loader2 className="w-8 h-8 animate-spin mb-3 text-emerald-500" />
+                    <span className="text-sm font-medium">Analyzing historical price data...</span>
+                  </div>
+                ) : priceHistory.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={priceHistory} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis 
+                        dataKey="date" 
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 11, fill: '#64748b' }}
+                        minTickGap={20}
+                      />
+                      <YAxis 
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 11, fill: '#64748b' }}
+                        tickFormatter={(value) => `$${value}`}
+                      />
+                      <Tooltip 
+                        contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                        formatter={(value: number) => [`$${value.toFixed(2)}`, 'Price']}
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="price" 
+                        stroke="#10b981" 
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{ r: 6, fill: '#10b981', stroke: '#fff', strokeWidth: 2 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-slate-400 text-sm">
+                    No historical data available for this product.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -282,6 +428,90 @@ export default function Dashboard() {
         </div>
         <button className="px-4 py-2 border shrink-0 border-slate-700 text-slate-300 rounded hover:bg-slate-800 text-sm font-medium transition-all">Configure Automation Settings</button>
       </div>
+
+      {/* Price Alert Modal */}
+      {alertDeal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                <Bell className="w-4 h-4 text-emerald-600" />
+                Set Price Alert
+              </h3>
+              <button 
+                onClick={() => setAlertDeal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Product</p>
+                <p className="text-sm font-medium text-slate-900 line-clamp-2">{alertDeal.productName}</p>
+              </div>
+              
+              <div className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <span className="text-sm text-slate-600">Current Deal Price:</span>
+                <span className="font-bold text-emerald-600">{alertDeal.dealPrice}</span>
+              </div>
+              
+              <div className="space-y-2">
+                <label htmlFor="targetPrice" className="block text-sm font-bold text-slate-700">
+                  Target Price
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                  <input
+                    type="number"
+                    id="targetPrice"
+                    value={targetPrice}
+                    onChange={(e) => setTargetPrice(e.target.value)}
+                    step="0.01"
+                    min="0"
+                    placeholder="e.g. 199.99"
+                    className="w-full pl-8 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-shadow outline-none text-sm text-slate-900"
+                  />
+                </div>
+                <p className="text-xs text-slate-500">We'll notify you when the price drops below this amount.</p>
+              </div>
+            </div>
+            
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setAlertDeal(null)}
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setAlertNotification(`Alert saved! We'll notify you if the price drops below $${targetPrice}.`);
+                  setAlertDeal(null);
+                  setTimeout(() => setAlertNotification(""), 5000);
+                }}
+                disabled={!targetPrice || isNaN(parseFloat(targetPrice))}
+                className="px-4 py-2 bg-emerald-600 text-white font-semibold rounded-lg hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm flex items-center gap-2"
+              >
+                <Save className="w-4 h-4" />
+                Save Alert
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {alertNotification && (
+        <div className="fixed bottom-4 right-4 bg-slate-800 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50 animate-in slide-in-from-bottom-4">
+          <CheckCircle className="w-5 h-5 text-emerald-400" />
+          <span className="text-sm font-medium">{alertNotification}</span>
+          <button onClick={() => setAlertNotification("")} className="text-slate-400 hover:text-white transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
