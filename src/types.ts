@@ -11,9 +11,3 @@ export interface Deal {
   originalPrice: string;
   amazonUrl: string;
 }
-
-export interface ScanResult {
-  category: string;
-  timestamp: string;
-  products: Deal[];
-}

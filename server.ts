@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
@@ -14,7 +15,7 @@ const ai = new GoogleGenAI({
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
@@ -62,8 +63,22 @@ Output the result purely as a JSON array of objects without any markdown formatt
       });
 
       const text = response.text || "[]";
-      const products = JSON.parse(text);
-      
+      const parsed = JSON.parse(text);
+
+      // Validate the model output before it reaches the client: a non-array payload
+      // or mistyped fields used to flow straight into state and crash rendering.
+      if (!Array.isArray(parsed)) {
+        return res.status(502).json({ error: "Model returned an unexpected format" });
+      }
+      const products = parsed.map((item: any) => ({
+        productName: String(item?.productName ?? ""),
+        description: String(item?.description ?? ""),
+        department: String(item?.department ?? ""),
+        dealPrice: String(item?.dealPrice ?? ""),
+        originalPrice: String(item?.originalPrice ?? ""),
+        amazonUrl: String(item?.amazonUrl ?? ""),
+      }));
+
       res.json({ products });
     } catch (error: any) {
       console.error("Error during scan:", error);
@@ -99,8 +114,16 @@ Do not use markdown formatting. Just output the JSON.`;
       });
 
       const text = response.text || "[]";
-      const history = JSON.parse(text);
-      
+      const parsed = JSON.parse(text);
+
+      if (!Array.isArray(parsed)) {
+        return res.status(502).json({ error: "Model returned an unexpected format" });
+      }
+      // Coerce prices to numbers: string prices crashed the chart tooltip's toFixed().
+      const history = parsed
+        .map((item: any) => ({ date: String(item?.date ?? ""), price: Number(item?.price) }))
+        .filter((item) => Number.isFinite(item.price));
+
       res.json({ history });
     } catch (error: any) {
       console.error("Error generating history:", error);
@@ -127,4 +150,7 @@ Do not use markdown formatting. Just output the JSON.`;
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("Failed to start server:", err);
+  process.exit(1);
+});

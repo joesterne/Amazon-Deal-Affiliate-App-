@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import { initAuth, googleSignIn, logout } from "./lib/firebaseAuth";
 import { User } from "firebase/auth";
 import Dashboard from "./components/Dashboard";
-import { LogIn } from "lucide-react";
 
 export default function App() {
   const [needsAuth, setNeedsAuth] = useState(false);
@@ -47,7 +46,14 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await logout();
+    try {
+      await logout();
+    } catch (err) {
+      console.error("Logout failed:", err);
+    } finally {
+      setUser(null);
+      setNeedsAuth(true);
+    }
   };
 
   if (isInitializing) {

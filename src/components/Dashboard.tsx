@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { Search, Loader2, ArrowUpRight, Save, Clock, CheckCircle, LineChart as LineChartIcon, X, Bell } from "lucide-react";
 import { Deal, PriceHistoryItem } from "../types";
 import { createSpreadsheet, appendToSheet, createTask } from "../lib/workspaceApi";
@@ -17,6 +17,7 @@ export default function Dashboard() {
   const [selectedProduct, setSelectedProduct] = useState<Deal | null>(null);
   const [priceHistory, setPriceHistory] = useState<PriceHistoryItem[]>([]);
   const [isFetchingHistory, setIsFetchingHistory] = useState(false);
+  const trendRequestRef = useRef(0);
 
   const [alertDeal, setAlertDeal] = useState<Deal | null>(null);
   const [targetPrice, setTargetPrice] = useState<string>("");
@@ -25,7 +26,13 @@ export default function Dashboard() {
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!category.trim()) return;
-    
+    // A cleared threshold parses to 0, which the server treats as "no threshold" and
+    // silently switches to a generic scan; reject it instead of changing modes unasked.
+    if (!discountThreshold || discountThreshold < 1 || discountThreshold > 99) {
+      setError("Enter a minimum drop between 1% and 99%.");
+      return;
+    }
+
     setIsScanning(true);
     setExportSuccess(false);
     setError("");
@@ -53,16 +60,22 @@ export default function Dashboard() {
   };
 
   const processUrl = (url: string) => {
-    if (!affiliateTag.trim()) return url;
+    // The scan prompt allows Gemini to return a bare ASIN instead of a URL;
+    // treating it as a URL produced broken links like "B08XXXX?tag=...".
+    const trimmed = url.trim();
+    const fullUrl = /^[A-Z0-9]{10}$/i.test(trimmed)
+      ? `https://www.amazon.com/dp/${trimmed.toUpperCase()}`
+      : url;
+    if (!affiliateTag.trim()) return fullUrl;
     try {
-      const urlObj = new URL(url);
+      const urlObj = new URL(fullUrl);
       urlObj.searchParams.set("tag", affiliateTag.trim());
       return urlObj.toString();
     } catch (e) {
       // If parsing fails, do simple string append
-      return url.includes("?") 
-        ? `${url}&tag=${affiliateTag.trim()}`
-        : `${url}?tag=${affiliateTag.trim()}`;
+      return fullUrl.includes("?")
+        ? `${fullUrl}&tag=${affiliateTag.trim()}`
+        : `${fullUrl}?tag=${affiliateTag.trim()}`;
     }
   };
 
@@ -125,12 +138,13 @@ export default function Dashboard() {
     setSelectedProduct(deal);
     setIsFetchingHistory(true);
     setPriceHistory([]);
-    
+    const requestId = ++trendRequestRef.current;
+
     try {
       const response = await fetch("/api/price-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           productName: deal.productName,
           originalPrice: deal.originalPrice,
           dealPrice: deal.dealPrice
@@ -142,12 +156,16 @@ export default function Dashboard() {
       }
 
       const data = await response.json();
+      // A slower earlier request must not overwrite a newer product's trend.
+      if (trendRequestRef.current !== requestId) return;
       setPriceHistory(data.history || []);
     } catch (err: any) {
       console.error(err);
       // Fallback: If it fails, we just don't show the graph properly or we show empty.
     } finally {
-      setIsFetchingHistory(false);
+      if (trendRequestRef.current === requestId) {
+        setIsFetchingHistory(false);
+      }
     }
   };
 
@@ -487,6 +505,21 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={() => {
+                  // Persist the alert; previously "Save" only showed a toast and
+                  // the alert vanished with it. (Checking saved alerts against new
+                  // scans is still not wired up.)
+                  try {
+                    const existing = JSON.parse(localStorage.getItem("priceAlerts") || "[]");
+                    existing.push({
+                      productName: alertDeal?.productName,
+                      amazonUrl: alertDeal?.amazonUrl,
+                      targetPrice: parseFloat(targetPrice),
+                      savedAt: new Date().toISOString()
+                    });
+                    localStorage.setItem("priceAlerts", JSON.stringify(existing));
+                  } catch {
+                    // Storage unavailable; the confirmation toast still shows.
+                  }
                   setAlertNotification(`Alert saved! We'll notify you if the price drops below $${targetPrice}.`);
                   setAlertDeal(null);
                   setTimeout(() => setAlertNotification(""), 5000);
